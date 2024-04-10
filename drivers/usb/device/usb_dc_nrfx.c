@@ -123,6 +123,7 @@ struct nrf_usbd_ep_buf {
  */
 struct nrf_usbd_ep_ctx {
 	struct nrf_usbd_ep_cfg cfg;
+	uint8_t *in_buf;
 	struct nrf_usbd_ep_buf out_buf;
 	volatile bool read_complete;
 	volatile bool read_pending;
@@ -201,8 +202,17 @@ K_MEM_SLAB_DEFINE(fifo_elem_slab, FIFO_ELEM_SZ,
 #define EP_ISOIN_INDEX CFG_EPIN_CNT
 #define EP_ISOOUT_INDEX (CFG_EPIN_CNT + CFG_EP_ISOIN_CNT + CFG_EPOUT_CNT)
 
+#define EP_IN_BUF_MAX_SZ	1024UL
 #define EP_OUT_BUF_MAX_SZ	64UL
 #define ISO_EP_OUT_BUF_MAX_SZ	1024UL
+
+/**
+ * @brief Input endpoint buffers
+ *	Used as buffers for the input endpoints' data transfer
+ *	Max buffers size possible: 1024 Bytes
+ */
+static uint8_t ep_in_bufs[CFG_EPIN_CNT][EP_IN_BUF_MAX_SZ]
+	       __aligned(sizeof(uint32_t));
 
 /**
  * @brief Output endpoint buffers
@@ -631,6 +641,8 @@ static int eps_ctx_init(void)
 		ep_ctx = in_endpoint_ctx(i);
 		__ASSERT_NO_MSG(ep_ctx);
 		ep_ctx_reset(ep_ctx);
+
+		ep_ctx->in_buf = ep_in_bufs[i];
 	}
 
 	for (i = 0U; i < CFG_EPOUT_CNT; i++) {
@@ -1620,7 +1632,7 @@ int usb_dc_ep_flush(const uint8_t ep)
 }
 
 int usb_dc_ep_write(const uint8_t ep, const uint8_t *const data,
-		    const uint32_t data_len, uint32_t *const ret_bytes)
+		    uint32_t data_len, uint32_t *const ret_bytes)
 {
 	LOG_DBG("ep_write: ep 0x%02x, len %d", ep, data_len);
 	struct nrf_usbd_ctx *ctx = get_usbd_ctx();
@@ -1688,8 +1700,13 @@ int usb_dc_ep_write(const uint8_t ep, const uint8_t *const data,
 		return 0;
 	}
 
+	if (data_len > EP_IN_BUF_MAX_SZ) {
+		data_len = EP_IN_BUF_MAX_SZ;
+	}
+	memcpy(ep_ctx->in_buf, data, data_len);
+
 	ep_ctx->write_in_progress = true;
-	NRFX_USBD_TRANSFER_IN(transfer, data, data_len, 0);
+	NRFX_USBD_TRANSFER_IN(transfer, ep_ctx->in_buf, data_len, 0);
 	nrfx_err_t err = nrfx_usbd_ep_transfer(ep_addr_to_nrfx(ep), &transfer);
 
 	if (err != NRFX_SUCCESS) {
